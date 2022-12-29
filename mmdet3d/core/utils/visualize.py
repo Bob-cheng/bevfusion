@@ -50,7 +50,8 @@ def visualize_camera(
     classes: Optional[List[str]] = None,
     color: Optional[Tuple[int, int, int]] = None,
     thickness: float = 4,
-) -> None:
+    box_idxs=None
+):
     canvas = image.copy()
     canvas = cv2.cvtColor(canvas, cv2.COLOR_RGB2BGR)
 
@@ -68,10 +69,14 @@ def visualize_camera(
         indices = np.all(coords[..., 2] > 0, axis=1)
         coords = coords[indices]
         labels = labels[indices]
+        if box_idxs is not None:
+            box_idxs = box_idxs[indices]
 
         indices = np.argsort(-np.min(coords[..., 2], axis=1))
         coords = coords[indices]
         labels = labels[indices]
+        if box_idxs is not None:
+            box_idxs = box_idxs[indices]
 
         coords = coords.reshape(-1, 4)
         coords[:, 2] = np.clip(coords[:, 2], a_min=1e-5, a_max=1e5)
@@ -103,11 +108,17 @@ def visualize_camera(
                     thickness,
                     cv2.LINE_AA,
                 )
+        for index in range(coords.shape[0]):
+            if box_idxs is not None:
+                text_xy = coords[index, 6].astype(np.int)
+                # text_color = list(np.random.random(size=3) * 256)
+                cv2.putText(canvas,f"b{box_idxs[index]}", text_xy, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 255, thickness=1)
         canvas = canvas.astype(np.uint8)
     canvas = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
 
     mmcv.mkdir_or_exist(os.path.dirname(fpath))
     mmcv.imwrite(canvas, fpath)
+    return canvas
 
 
 def visualize_lidar(

@@ -6,11 +6,12 @@ import mmcv
 import numpy as np
 import torch
 from mmcv import Config
-from mmcv.parallel import MMDistributedDataParallel
-from mmcv.runner import load_checkpoint
+from mmcv.parallel import MMDistributedDataParallel, MMDataParallel
+from mmcv.runner import load_checkpoint, wrap_fp16_model
 from torchpack import distributed as dist
 from torchpack.utils.config import configs
-from torchpack.utils.tqdm import tqdm
+# from torchpack.utils.tqdm import tqdm
+from tqdm import tqdm
 
 from mmdet3d.core import LiDARInstance3DBoxes
 from mmdet3d.core.utils import visualize_camera, visualize_lidar, visualize_map
@@ -58,7 +59,8 @@ def main() -> None:
     torch.cuda.set_device(dist.local_rank())
 
     # build the dataloader
-    dataset = build_dataset(cfg.data[args.split])
+    # dataset = build_dataset(cfg.data[args.split])
+    dataset = build_dataset(cfg.data.test)
     dataflow = build_dataloader(
         dataset,
         samples_per_gpu=1,
@@ -69,14 +71,37 @@ def main() -> None:
 
     # build the model and load checkpoint
     if args.mode == "pred":
-        model = build_model(cfg.model)
-        load_checkpoint(model, args.checkpoint, map_location="cpu")
+        # model = build_model(cfg.model)
 
-        model = MMDistributedDataParallel(
-            model.cuda(),
-            device_ids=[torch.cuda.current_device()],
-            broadcast_buffers=False,
-        )
+        # model = MMDistributedDataParallel(
+        #     model.cuda(),
+        #     device_ids=[torch.cuda.current_device()],
+        #     broadcast_buffers=False,
+        # )
+
+        # model = MMDataParallel(model, device_ids=[0])
+
+        cfg.model.train_cfg = None
+        model = build_model(cfg.model, test_cfg=cfg.get("test_cfg"))
+        fp16_cfg = cfg.get("fp16", None)
+        if fp16_cfg is not None:
+            wrap_fp16_model(model)
+        checkpoint = load_checkpoint(model, args.checkpoint, map_location="cpu")
+        # old versions did not save class info in checkpoints, this walkaround is
+        # for backward compatibility
+        if "CLASSES" in checkpoint.get("meta", {}):
+            model.CLASSES = checkpoint["meta"]["CLASSES"]
+        else:
+            model.CLASSES = dataset.CLASSES
+        distributed = True
+        if not distributed:
+            model = MMDataParallel(model, device_ids=[0])
+        else:
+            model = MMDistributedDataParallel(
+                model.cuda(),
+                device_ids=[torch.cuda.current_device()],
+                broadcast_buffers=False,
+            )
         model.eval()
 
     for data in tqdm(dataflow):
@@ -123,7 +148,7 @@ def main() -> None:
 
         if args.mode == "gt" and "gt_masks_bev" in data:
             masks = data["gt_masks_bev"].data[0].numpy()
-            masks = masks.astype(np.bool)
+            masks = masks.astype(bool)
         elif args.mode == "pred" and "masks_bev" in outputs[0]:
             masks = outputs[0]["masks_bev"].numpy()
             masks = masks >= args.map_score
@@ -164,3 +189,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+"""
+CUDA_VISIBLE_DEVICES=7 torchpack dist-run -np 1 python ./bevfusion/tools/visualize.py bevfusion/configs/nuscenes/det/transfusion/secfpn/camera+lidar/swint_v0p075/convfuser.yaml --mode pred --checkpoint bevfusion/pretrained/bevfusion-det.pth --out-dir ./data/nuscenes/mini/visulize/pred/ --bbox-score 0.3
+"""

@@ -174,7 +174,7 @@ class TransFusionHead(nn.Module):
         meshgrid = [[0, x_size - 1, x_size], [0, y_size - 1, y_size]]
         # NOTE: modified
         batch_x, batch_y = torch.meshgrid(
-            *[torch.linspace(it[0], it[1], it[2]) for it in meshgrid]
+            *[torch.linspace(it[0], it[1], it[2]) for it in meshgrid], indexing='ij'
         )
         batch_x = batch_x + 0.5
         batch_y = batch_y + 0.5
@@ -270,7 +270,8 @@ class TransFusionHead(nn.Module):
         top_proposals = heatmap.view(batch_size, -1).argsort(dim=-1, descending=True)[
             ..., : self.num_proposals
         ]
-        top_proposals_class = top_proposals // heatmap.shape[-1]
+        # top_proposals_class = top_proposals // heatmap.shape[-1]
+        top_proposals_class = torch.div(top_proposals, heatmap.shape[-1], rounding_mode='trunc')
         top_proposals_index = top_proposals % heatmap.shape[-1]
         query_feat = lidar_feat_flatten.gather(
             index=top_proposals_index[:, None, :].expand(
@@ -394,6 +395,7 @@ class TransFusionHead(nn.Module):
         num_pos = np.sum(res_tuple[5])
         matched_ious = np.mean(res_tuple[6])
         heatmap = torch.cat(res_tuple[7], dim=0)
+        obj_gt_indices = torch.cat(res_tuple[8], dim=0)
         return (
             labels,
             label_weights,
@@ -403,6 +405,7 @@ class TransFusionHead(nn.Module):
             num_pos,
             matched_ious,
             heatmap,
+            obj_gt_indices
         )
 
     def get_targets_single(self, gt_bboxes_3d, gt_labels_3d, preds_dict, batch_idx):
@@ -500,6 +503,7 @@ class TransFusionHead(nn.Module):
         ious = torch.clamp(ious, min=0.0, max=1.0)
         labels = bboxes_tensor.new_zeros(num_proposals, dtype=torch.long)
         label_weights = bboxes_tensor.new_zeros(num_proposals, dtype=torch.long)
+        obj_gt_indices = -1 * bboxes_tensor.new_ones(num_proposals, dtype=torch.long)
 
         if gt_labels_3d is not None:  # default label is -1
             labels += self.num_classes
@@ -509,19 +513,23 @@ class TransFusionHead(nn.Module):
             pos_bbox_targets = self.bbox_coder.encode(sampling_result.pos_gt_bboxes)
 
             bbox_targets[pos_inds, :] = pos_bbox_targets
-            bbox_weights[pos_inds, :] = 1.0
+            # bbox_weights[pos_inds, :] = 1.0
+            bbox_weights[pos_inds, :] = torch.ones_like(bbox_weights[pos_inds, :]).float()
 
             if gt_labels_3d is None:
                 labels[pos_inds] = 1
             else:
                 labels[pos_inds] = gt_labels_3d[sampling_result.pos_assigned_gt_inds]
+                obj_gt_indices[pos_inds] = sampling_result.pos_assigned_gt_inds
             if self.train_cfg.pos_weight <= 0:
-                label_weights[pos_inds] = 1.0
+                # label_weights[pos_inds] = 1.0
+                label_weights[pos_inds] = torch.ones_like(label_weights[pos_inds])
             else:
                 label_weights[pos_inds] = self.train_cfg.pos_weight
 
         if len(neg_inds) > 0:
-            label_weights[neg_inds] = 1.0
+            # label_weights[neg_inds] = 1.0
+            label_weights[neg_inds] = torch.ones_like(label_weights[neg_inds])
 
         # # compute dense heatmap targets
         device = labels.device
@@ -582,6 +590,7 @@ class TransFusionHead(nn.Module):
             int(pos_inds.shape[0]),
             float(mean_iou),
             heatmap[None],
+            obj_gt_indices
         )
 
     @force_fp32(apply_to=("preds_dicts"))
@@ -604,6 +613,7 @@ class TransFusionHead(nn.Module):
             num_pos,
             matched_ious,
             heatmap,
+            obj_gt_indices
         ) = self.get_targets(gt_bboxes_3d, gt_labels_3d, preds_dicts[0])
         if hasattr(self, "on_the_image_mask"):
             label_weights = label_weights * self.on_the_image_mask
@@ -712,13 +722,23 @@ class TransFusionHead(nn.Module):
 
         return loss_dict
 
-    def get_bboxes(self, preds_dicts, metas, img=None, rescale=False, for_roi=False):
+    def get_bboxes(self, preds_dicts, metas, 
+                img=None, 
+                rescale=False, 
+                for_roi=False,
+                gt_bboxes_3d=None,
+                gt_labels_3d=None
+                ):
         """Generate bboxes from bbox head predictions.
         Args:
             preds_dicts (tuple[list[dict]]): Prediction results.
         Returns:
             list[list[dict]]: Decoded bbox, scores and labels for each layer & each batch
         """
+        if gt_bboxes_3d is not None and gt_labels_3d is not None:
+            obj_gt_indices = self.get_targets(gt_bboxes_3d, gt_labels_3d, preds_dicts[0])[-1]
+        else:
+            obj_gt_indices = None
         rets = []
         for layer_id, preds_dict in enumerate(preds_dicts):
             batch_size = preds_dict[0]["heatmap"].shape[0]
@@ -745,7 +765,7 @@ class TransFusionHead(nn.Module):
                 batch_center,
                 batch_height,
                 batch_vel,
-                filter=True,
+                filter=True if obj_gt_indices is None else False,
             )
 
             if self.test_cfg["dataset"] == "nuScenes":
@@ -783,6 +803,8 @@ class TransFusionHead(nn.Module):
                 boxes3d = temp[i]["bboxes"]
                 scores = temp[i]["scores"]
                 labels = temp[i]["labels"]
+                if obj_gt_indices is not None:
+                    assert len(labels) == len(obj_gt_indices)
                 ## adopt circle nms for different categories
                 if self.test_cfg["nms_type"] != None:
                     keep_mask = torch.zeros_like(scores)
@@ -832,9 +854,10 @@ class TransFusionHead(nn.Module):
                         bboxes=boxes3d[keep_mask],
                         scores=scores[keep_mask],
                         labels=labels[keep_mask],
+                        obj_gt_indices=obj_gt_indices[keep_mask] if obj_gt_indices is not None else None
                     )
                 else:  # no nms
-                    ret = dict(bboxes=boxes3d, scores=scores, labels=labels)
+                    ret = dict(bboxes=boxes3d, scores=scores, labels=labels, obj_gt_indices=obj_gt_indices)
                 ret_layer.append(ret)
             rets.append(ret_layer)
         assert len(rets) == 1
@@ -846,6 +869,7 @@ class TransFusionHead(nn.Module):
                 ),
                 rets[0][0]["scores"],
                 rets[0][0]["labels"].int(),
+                rets[0][0]["obj_gt_indices"]
             ]
         ]
         return res

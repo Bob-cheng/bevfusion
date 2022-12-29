@@ -282,13 +282,16 @@ class BEVFusion(Base3DFusionModel):
             for type, head in self.heads.items():
                 if type == "object":
                     pred_dict = head(x, metas)
-                    bboxes = head.get_bboxes(pred_dict, metas)
-                    for k, (boxes, scores, labels) in enumerate(bboxes):
+                    bboxes = head.get_bboxes(pred_dict, metas, 
+                            gt_bboxes_3d=gt_bboxes_3d, gt_labels_3d=gt_labels_3d)
+                    # bboxes = head.get_bboxes(pred_dict, metas)
+                    for k, (boxes, scores, labels, obj_gt_indices) in enumerate(bboxes):
                         outputs[k].update(
                             {
                                 "boxes_3d": boxes.to("cpu"),
                                 "scores_3d": scores.cpu(),
                                 "labels_3d": labels.cpu(),
+                                "obj_gt_indices": obj_gt_indices.cpu() if obj_gt_indices is not None else None
                             }
                         )
                 elif type == "map":

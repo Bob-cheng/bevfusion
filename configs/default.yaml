@@ -1,5 +1,5 @@
-seed: 0
-deterministic: false
+seed: 17
+deterministic: True
 
 checkpoint_config:
   interval: 1

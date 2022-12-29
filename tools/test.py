@@ -228,3 +228,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+"""
+CUDA_VISIBLE_DEVICES=1,6,7 torchpack dist-run -np 3 python bevfusion/tools/test.py bevfusion/configs/nuscenes/det/transfusion/secfpn/camera+lidar/swint_v0p075/convfuser.yaml bevfusion/pretrained/bevfusion-det.pth --eval bbox --show --show-dir bevfusion/data/nuscenes/mini/visulize/pred
+"""
