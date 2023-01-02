@@ -231,4 +231,27 @@ if __name__ == "__main__":
 
 """
 CUDA_VISIBLE_DEVICES=1,6,7 torchpack dist-run -np 3 python bevfusion/tools/test.py bevfusion/configs/nuscenes/det/transfusion/secfpn/camera+lidar/swint_v0p075/convfuser.yaml bevfusion/pretrained/bevfusion-det.pth --eval bbox --show --show-dir bevfusion/data/nuscenes/mini/visulize/pred
+
+mAP: 0.5822                                                                                                         
+mATE: 0.4041                                                                                                        
+mASE: 0.4465                                                                                                        
+mAOE: 0.4723                                                                                                        
+mAVE: 0.4248                                                                                                        
+mAAE: 0.3267                                                                                                        
+NDS: 0.5837                                                                                                         
+Eval time: 2.5s                                                                                                     
+                                                                                                                    
+Per-class results:                                                                                                  
+Object Class    AP      ATE     ASE     AOE     AVE     AAE                                                         
+car     0.928   0.173   0.157   0.100   0.117   0.074                                                               
+truck   0.816   0.149   0.121   0.028   0.071   0.018                                                               
+bus     0.994   0.166   0.076   0.026   0.428   0.397                                                               
+trailer 0.000   1.000   1.000   1.000   1.000   1.000
+construction_vehicle    0.000   1.000   1.000   1.000   1.000   1.000
+pedestrian      0.926   0.118   0.257   0.378   0.217   0.125
+motorcycle      0.734   0.195   0.273   0.358   0.053   0.000
+bicycle 0.536   0.156   0.237   0.362   0.511   0.000
+traffic_cone    0.889   0.084   0.342   nan     nan     nan
+barrier 0.000   1.000   1.000   1.000   nan     nan
+
 """
