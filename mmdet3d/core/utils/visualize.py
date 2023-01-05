@@ -1,5 +1,6 @@
 import copy
 import os
+import io
 from typing import List, Optional, Tuple
 
 import cv2
@@ -115,9 +116,9 @@ def visualize_camera(
                 cv2.putText(canvas,f"b{box_idxs[index]}", text_xy, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 255, thickness=1)
         canvas = canvas.astype(np.uint8)
     canvas = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
-
-    mmcv.mkdir_or_exist(os.path.dirname(fpath))
-    mmcv.imwrite(canvas, fpath)
+    if fpath is not None:
+        mmcv.mkdir_or_exist(os.path.dirname(fpath))
+        mmcv.imwrite(canvas, fpath)
     return canvas
 
 
@@ -133,7 +134,7 @@ def visualize_lidar(
     color: Optional[Tuple[int, int, int]] = None,
     radius: float = 15,
     thickness: float = 25,
-) -> None:
+) -> np.ndarray:
     fig = plt.figure(figsize=(xlim[1] - xlim[0], ylim[1] - ylim[0]))
 
     ax = plt.gca()
@@ -161,16 +162,30 @@ def visualize_lidar(
                 color=np.array(color or OBJECT_PALETTE[name]) / 255,
             )
 
-    mmcv.mkdir_or_exist(os.path.dirname(fpath))
+    if fpath is not None:
+        mmcv.mkdir_or_exist(os.path.dirname(fpath))
+        fig.savefig(
+            fpath,
+            dpi=10,
+            facecolor="black",
+            format="png",
+            bbox_inches="tight",
+            pad_inches=0,
+        )
+    # return the numpy array of figure
+    io_buf = io.BytesIO()
     fig.savefig(
-        fpath,
-        dpi=10,
-        facecolor="black",
-        format="png",
-        bbox_inches="tight",
-        pad_inches=0,
-    )
+            io_buf,
+            facecolor="black", 
+            pad_inches=0,
+            format='raw')
+    io_buf.seek(0)
+    img_arr = np.reshape(np.frombuffer(io_buf.getvalue(), dtype=np.uint8),
+                        newshape=(int(fig.bbox.bounds[3]), int(fig.bbox.bounds[2]), -1))
+    io_buf.close()
     plt.close()
+    return img_arr.copy()
+        
 
 
 def visualize_map(

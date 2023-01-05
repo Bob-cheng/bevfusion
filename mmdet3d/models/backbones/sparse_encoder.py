@@ -3,8 +3,14 @@ from mmcv.runner import auto_fp16
 from torch import nn as nn
 
 from mmdet3d.ops import SparseBasicBlock, make_sparse_convmodule
-from mmdet3d.ops import spconv as spconv
+# from mmdet3d.ops import spconv as spconv
 from mmdet.models import BACKBONES
+
+from mmdet3d.ops.spconv2 import IS_SPCONV2_AVAILABLE
+if IS_SPCONV2_AVAILABLE:
+    import spconv.pytorch as spconv
+else:
+    from mmdet3d.ops import spconv as spconv
 
 
 @BACKBONES.register_module()

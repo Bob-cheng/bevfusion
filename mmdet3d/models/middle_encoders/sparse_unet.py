@@ -3,9 +3,14 @@ import torch
 from mmcv.runner import BaseModule, auto_fp16
 
 from mmdet3d.ops import SparseBasicBlock, make_sparse_convmodule
-from mmdet3d.ops import spconv as spconv
+# from mmdet3d.ops import spconv as spconv
 from ..builder import MIDDLE_ENCODERS
 
+from mmdet3d.ops.spconv2 import IS_SPCONV2_AVAILABLE
+if IS_SPCONV2_AVAILABLE:
+    import spconv.pytorch as spconv
+else:
+    from mmdet3d.ops import spconv as spconv
 
 @MIDDLE_ENCODERS.register_module()
 class SparseUNet(BaseModule):
