@@ -12,7 +12,7 @@ from mmdet3d.models.builder import (
     build_neck,
     build_vtransform,
 )
-from mmdet3d.ops import Voxelization, DynamicScatter
+from mmdet3d.ops.voxel_bev import Voxelization, DynamicScatter
 from mmdet3d.models import FUSIONMODELS
 
 

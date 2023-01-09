@@ -103,6 +103,17 @@ if __name__ == "__main__":
                 ],
             ),
             make_cuda_ext(
+                name="voxel_layer",
+                module="mmdet3d.ops.voxel_bev",
+                sources=[
+                    "src/voxelization.cpp",
+                    "src/scatter_points_cpu.cpp",
+                    "src/scatter_points_cuda.cu",
+                    "src/voxelization_cpu.cpp",
+                    "src/voxelization_cuda.cu",
+                ],
+            ),
+            make_cuda_ext(
                 name="roiaware_pool3d_ext",
                 module="mmdet3d.ops.roiaware_pool3d",
                 sources=[
