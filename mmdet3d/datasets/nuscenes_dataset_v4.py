@@ -1,4 +1,3 @@
-# Copyright (c) OpenMMLab. All rights reserved.
 import mmcv
 import numpy as np
 import pyquaternion
@@ -9,13 +8,11 @@ from os import path as osp
 from mmdet.datasets import DATASETS
 from ..core import show_result
 from ..core.bbox import Box3DMode, Coord3DMode, LiDARInstance3DBoxes
-# from .custom_3d import Custom3DDataset
-from .custom_3d_v2 import Custom3DDataset_v2
-from .pipelines import Compose
+from .custom_3d_v4 import Custom3DDataset_v4
 
 
 @DATASETS.register_module()
-class NuScenesDataset_v2(Custom3DDataset_v2):
+class NuScenesDataset_v4(Custom3DDataset_v4):
     r"""NuScenes Dataset.
 
     This class serves as the API for experiments on the NuScenes Dataset.
@@ -100,20 +97,13 @@ class NuScenesDataset_v2(Custom3DDataset_v2):
         'vehicle.parked',
         'vehicle.stopped',
     ]
-    # https://github.com/nutonomy/nuscenes-devkit/blob/57889ff20678577025326cfc24e57424a829be0a/python-sdk/nuscenes/eval/detection/evaluate.py#L222 # noqa
-    ErrNameMapping = {
-        'trans_err': 'mATE',
-        'scale_err': 'mASE',
-        'orient_err': 'mAOE',
-        'vel_err': 'mAVE',
-        'attr_err': 'mAAE'
-    }
     CLASSES = ('car', 'truck', 'trailer', 'bus', 'construction_vehicle',
                'bicycle', 'motorcycle', 'pedestrian', 'traffic_cone',
                'barrier')
 
     def __init__(self,
                  ann_file,
+                 num_views=6,
                  pipeline=None,
                  data_root=None,
                  classes=None,
@@ -123,8 +113,15 @@ class NuScenesDataset_v2(Custom3DDataset_v2):
                  box_type_3d='LiDAR',
                  filter_empty_gt=True,
                  test_mode=False,
+                 test_gt=False,
                  eval_version='detection_cvpr_2019',
-                 use_valid_flag=False):
+                 use_valid_flag=False,
+                 # Add
+                 extrinsics_noise=False,
+                 extrinsics_noise_type='single',
+                 drop_frames=False,
+                 drop_set=[0,'discrete'],
+                 noise_sensor_type='camera'):
         self.load_interval = load_interval
         self.use_valid_flag = use_valid_flag
         super().__init__(
@@ -137,6 +134,8 @@ class NuScenesDataset_v2(Custom3DDataset_v2):
             filter_empty_gt=filter_empty_gt,
             test_mode=test_mode)
 
+        self.num_views = num_views
+        assert self.num_views <= 6
         self.with_velocity = with_velocity
         self.eval_version = eval_version
         from nuscenes.eval.detection.config import config_factory
@@ -150,6 +149,46 @@ class NuScenesDataset_v2(Custom3DDataset_v2):
                 use_external=False,
             )
 
+        ### for frop foreground points
+        self.test_gt = test_gt
+        ## 增加部分
+        self.extrinsics_noise = extrinsics_noise # 外参是否扰动
+        assert extrinsics_noise_type in ['all', 'single'] 
+        self.extrinsics_noise_type = extrinsics_noise_type # 外参扰动类型
+        self.drop_frames = drop_frames # 是否丢帧
+        self.drop_ratio = drop_set[0] # 丢帧比例：assert ratio in [10, 20, ..., 90]
+        self.drop_type = drop_set[1] # 丢帧情况：连续(consecutive) or 离散(discrete)
+        self.noise_sensor_type = noise_sensor_type # lidar or camera 丢帧
+
+        if self.extrinsics_noise or self.drop_frames:
+            pkl_file = open('./data/nuscenes/nuscenes_infos_val_with_noise.pkl', 'rb')
+            noise_data = pickle.load(pkl_file)
+            self.noise_data = noise_data[noise_sensor_type]
+        else:
+            self.noise_data = None
+        
+        print('noise setting:')
+        if self.drop_frames:
+            print('frame drop setting: drop ratio:', self.drop_ratio, ', sensor type:', self.noise_sensor_type, ', drop type:', self.drop_type)
+        if self.extrinsics_noise:
+            assert noise_sensor_type=='camera'
+            print(f'add {extrinsics_noise_type} noise to extrinsics')
+    
+    ### for frop foreground points
+    def __getitem__(self, idx):
+        """Get item from infos according to the given index.
+
+        Returns:
+            dict: Data dictionary of the corresponding index.
+        """
+        if self.test_mode or self.test_gt:
+            return self.prepare_test_data(idx)
+        while True:
+            data = self.prepare_train_data(idx)
+            if data is None:
+                idx = self._rand_another(idx)
+                continue
+            return data
     def get_cat_ids(self, idx):
         """Get category distribution of single scene.
 
@@ -218,38 +257,75 @@ class NuScenesDataset_v2(Custom3DDataset_v2):
             timestamp=info['timestamp'] / 1e6,
         )
 
+        if self.noise_sensor_type == 'lidar':
+            if self.drop_frames:
+                pts_filename = input_dict['pts_filename']
+                file_name = pts_filename.split('/')[-1]
+
+                if self.noise_data[file_name]['noise']['drop_frames'][self.drop_ratio][self.drop_type]['stuck']:
+                    replace_file = self.noise_data[file_name]['noise']['drop_frames'][self.drop_ratio][self.drop_type]['replace']
+                    if replace_file != '':
+                        pts_filename = pts_filename.replace(file_name, replace_file)
+
+                        input_dict['pts_filename'] = pts_filename
+                        input_dict['sweeps'] = self.noise_data[replace_file]['mmdet_info']['sweeps']
+                        input_dict['timestamp'] = self.noise_data[replace_file]['mmdet_info']['timestamp'] / 1e6
+
+        cam_orders = ['CAM_FRONT_LEFT', 'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_BACK_RIGHT', 'CAM_BACK', 'CAM_BACK_LEFT']
         if self.modality['use_camera']:
             image_paths = []
             lidar2img_rts = []
-            for cam_type, cam_info in info['cams'].items():
-                image_paths.append(cam_info['data_path'])
+            caminfos = []
+            # for cam_type, cam_info in info['cams'].items():
+            for cam_type in cam_orders:
+                cam_info = info['cams'][cam_type]
+
+                cam_data_path = cam_info['data_path']
+                file_name = cam_data_path.split('/')[-1]
+                if self.noise_sensor_type == 'camera':
+                    if self.drop_frames:
+                        if self.noise_data[file_name]['noise']['drop_frames'][self.drop_ratio][self.drop_type]['stuck']:
+                            replace_file = self.noise_data[file_name]['noise']['drop_frames'][self.drop_ratio][self.drop_type]['replace']
+                            if replace_file != '':
+                                cam_data_path = cam_data_path.replace(file_name, replace_file)
+
+                                # print(file_name, self.noise_data[file_name]['prev'])
+
+                image_paths.append(cam_data_path)
                 # obtain lidar to image transformation matrix
-                lidar2cam_r = np.linalg.inv(cam_info['sensor2lidar_rotation'])
-                lidar2cam_t = cam_info[
-                    'sensor2lidar_translation'] @ lidar2cam_r.T
+                if self.extrinsics_noise:
+                    sensor2lidar_rotation = self.noise_data[file_name]['noise']['extrinsics_noise'][f'{self.extrinsics_noise_type}_noise_sensor2lidar_rotation']
+                    sensor2lidar_translation = self.noise_data[file_name]['noise']['extrinsics_noise'][f'{self.extrinsics_noise_type}_noise_sensor2lidar_translation']
+                else:
+                    sensor2lidar_rotation = cam_info['sensor2lidar_rotation']
+                    sensor2lidar_translation = cam_info['sensor2lidar_translation']
+
+                lidar2cam_r = np.linalg.inv(sensor2lidar_rotation)
+                lidar2cam_t = sensor2lidar_translation @ lidar2cam_r.T
                 lidar2cam_rt = np.eye(4)
                 lidar2cam_rt[:3, :3] = lidar2cam_r.T
                 lidar2cam_rt[3, :3] = -lidar2cam_t
-                # print(cam_info.keys())
-                # intrinsic = cam_info['cam_intrinsic']
-                if 'camera_intrinsics' in cam_info.keys():
-                    intrinsic = cam_info['camera_intrinsics']
-                else:
-                    intrinsic = cam_info['cam_intrinsic']
+                intrinsic = cam_info['cam_intrinsic']
                 viewpad = np.eye(4)
                 viewpad[:intrinsic.shape[0], :intrinsic.shape[1]] = intrinsic
                 lidar2img_rt = (viewpad @ lidar2cam_rt.T)
                 lidar2img_rts.append(lidar2img_rt)
+                caminfos.append(
+                    {'sensor2lidar_translation':sensor2lidar_translation, 
+                    'sensor2lidar_rotation':sensor2lidar_rotation,
+                    'cam_intrinsic':cam_info['cam_intrinsic']
+                    })
 
             input_dict.update(
                 dict(
                     img_filename=image_paths,
                     lidar2img=lidar2img_rts,
+                    caminfo=caminfos
                 ))
 
-        # if not self.test_mode:
-        annos = self.get_ann_info(index)
-        input_dict['ann_info'] = annos
+        if not self.test_mode:
+            annos = self.get_ann_info(index)
+            input_dict['ann_info'] = annos
 
         return input_dict
 
@@ -340,14 +416,14 @@ class NuScenesDataset_v2(Custom3DDataset_v2):
                     elif name in ['bicycle', 'motorcycle']:
                         attr = 'cycle.with_rider'
                     else:
-                        attr = NuScenesDataset_v2.DefaultAttribute[name]
+                        attr = NuScenesDataset_v4.DefaultAttribute[name]
                 else:
                     if name in ['pedestrian']:
                         attr = 'pedestrian.standing'
                     elif name in ['bus']:
                         attr = 'vehicle.stopped'
                     else:
-                        attr = NuScenesDataset_v2.DefaultAttribute[name]
+                        attr = NuScenesDataset_v4.DefaultAttribute[name]
 
                 nusc_anno = dict(
                     sample_token=sample_token,
@@ -419,10 +495,6 @@ class NuScenesDataset_v2(Custom3DDataset_v2):
             for k, v in metrics['label_tp_errors'][name].items():
                 val = float('{:.4f}'.format(v))
                 detail['{}/{}_{}'.format(metric_prefix, name, k)] = val
-            for k, v in metrics['tp_errors'].items():
-                val = float('{:.4f}'.format(v))
-                detail['{}/{}'.format(metric_prefix,
-                                      self.ErrNameMapping[k])] = val
 
         detail['{}/NDS'.format(metric_prefix)] = metrics['nd_score']
         detail['{}/mAP'.format(metric_prefix)] = metrics['mean_ap']
@@ -454,16 +526,9 @@ class NuScenesDataset_v2(Custom3DDataset_v2):
         else:
             tmp_dir = None
 
-        # currently the output prediction results could be in two formats
-        # 1. list of dict('boxes_3d': ..., 'scores_3d': ..., 'labels_3d': ...)
-        # 2. list of dict('pts_bbox' or 'img_bbox':
-        #     dict('boxes_3d': ..., 'scores_3d': ..., 'labels_3d': ...))
-        # this is a workaround to enable evaluation of both formats on nuScenes
-        # refer to https://github.com/open-mmlab/mmdetection3d/issues/449
-        if not ('pts_bbox' in results[0] or 'img_bbox' in results[0]):
+        if not isinstance(results[0], dict):
             result_files = self._format_bbox(results, jsonfile_prefix)
         else:
-            # should take the inner dict out of 'pts_bbox' or 'img_bbox' dict
             result_files = dict()
             for name in results[0]:
                 print(f'\nFormating bboxes of {name}')
@@ -480,8 +545,7 @@ class NuScenesDataset_v2(Custom3DDataset_v2):
                  jsonfile_prefix=None,
                  result_names=['pts_bbox'],
                  show=False,
-                 out_dir=None,
-                 pipeline=None):
+                 out_dir=None):
         """Evaluation in nuScenes protocol.
 
         Args:
@@ -495,8 +559,6 @@ class NuScenesDataset_v2(Custom3DDataset_v2):
             show (bool): Whether to visualize.
                 Default: False.
             out_dir (str): Path to save the visualization results.
-                Default: None.
-            pipeline (list[dict], optional): raw data loading for showing.
                 Default: None.
 
         Returns:
@@ -517,61 +579,37 @@ class NuScenesDataset_v2(Custom3DDataset_v2):
             tmp_dir.cleanup()
 
         if show:
-            self.show(results, out_dir, pipeline=pipeline)
+            self.show(results, out_dir)
+        print(results_dict)
+        if osp.exists('/evaluation_result/'):
+            with open("/evaluation_result/total", "a") as result_file:
+                result_file.write("{}\n".format("\n".join(["{}:{}".format(k, v) for k, v in results_dict.items()])))
         return results_dict
 
-    def _build_default_pipeline(self):
-        """Build the default pipeline for this dataset."""
-        pipeline = [
-            dict(
-                type='LoadPointsFromFile',
-                coord_type='LIDAR',
-                load_dim=5,
-                use_dim=5,
-                file_client_args=dict(backend='disk')),
-            dict(
-                type='LoadPointsFromMultiSweeps',
-                sweeps_num=10,
-                file_client_args=dict(backend='disk')),
-            dict(
-                type='DefaultFormatBundle3D',
-                class_names=self.CLASSES,
-                with_label=False),
-            dict(type='Collect3D', keys=['points'])
-        ]
-        return Compose(pipeline)
-
-    def show(self, results, out_dir, show=True, pipeline=None):
+    def show(self, results, out_dir):
         """Results visualization.
 
         Args:
             results (list[dict]): List of bounding boxes results.
             out_dir (str): Output directory of visualization result.
-            show (bool): Visualize the results online.
-            pipeline (list[dict], optional): raw data loading for showing.
-                Default: None.
         """
-        assert out_dir is not None, 'Expect out_dir, got none.'
-        pipeline = self._get_pipeline(pipeline)
         for i, result in enumerate(results):
-            if 'pts_bbox' in result.keys():
-                result = result['pts_bbox']
+            example = self.prepare_test_data(i)
+            points = example['points'][0]._data.numpy()
             data_info = self.data_infos[i]
             pts_path = data_info['lidar_path']
             file_name = osp.split(pts_path)[-1].split('.')[0]
-            points = self._extract_data(i, pipeline, 'points').numpy()
             # for now we convert points into depth mode
             points = Coord3DMode.convert_point(points, Coord3DMode.LIDAR,
                                                Coord3DMode.DEPTH)
-            inds = result['scores_3d'] > 0.1
-            gt_bboxes = self.get_ann_info(i)['gt_bboxes_3d'].tensor.numpy()
-            show_gt_bboxes = Box3DMode.convert(gt_bboxes, Box3DMode.LIDAR,
-                                               Box3DMode.DEPTH)
-            pred_bboxes = result['boxes_3d'][inds].tensor.numpy()
-            show_pred_bboxes = Box3DMode.convert(pred_bboxes, Box3DMode.LIDAR,
-                                                 Box3DMode.DEPTH)
-            show_result(points, show_gt_bboxes, show_pred_bboxes, out_dir,
-                        file_name, show)
+            inds = result['pts_bbox']['scores_3d'] > 0.1
+            gt_bboxes = self.get_ann_info(i)['gt_bboxes_3d'].tensor
+            gt_bboxes = Box3DMode.convert(gt_bboxes, Box3DMode.LIDAR,
+                                          Box3DMode.DEPTH)
+            pred_bboxes = result['pts_bbox']['boxes_3d'][inds].tensor.numpy()
+            pred_bboxes = Box3DMode.convert(pred_bboxes, Box3DMode.LIDAR,
+                                            Box3DMode.DEPTH)
+            show_result(points, gt_bboxes, pred_bboxes, out_dir, file_name)
 
 
 def output_to_nusc_box(detection):

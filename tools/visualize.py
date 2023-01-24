@@ -59,8 +59,7 @@ def main() -> None:
     torch.cuda.set_device(dist.local_rank())
 
     # build the dataloader
-    # dataset = build_dataset(cfg.data[args.split])
-    dataset = build_dataset(cfg.data.test)
+    dataset = build_dataset(cfg.data[args.split])
     dataflow = build_dataloader(
         dataset,
         samples_per_gpu=1,
@@ -71,18 +70,8 @@ def main() -> None:
 
     # build the model and load checkpoint
     if args.mode == "pred":
-        # model = build_model(cfg.model)
+        model = build_model(cfg.model)
 
-        # model = MMDistributedDataParallel(
-        #     model.cuda(),
-        #     device_ids=[torch.cuda.current_device()],
-        #     broadcast_buffers=False,
-        # )
-
-        # model = MMDataParallel(model, device_ids=[0])
-
-        cfg.model.train_cfg = None
-        model = build_model(cfg.model, test_cfg=cfg.get("test_cfg"))
         fp16_cfg = cfg.get("fp16", None)
         if fp16_cfg is not None:
             wrap_fp16_model(model)
@@ -191,5 +180,7 @@ if __name__ == "__main__":
     main()
 
 """
-CUDA_VISIBLE_DEVICES=7 torchpack dist-run -np 1 python ./bevfusion/tools/visualize.py bevfusion/configs/nuscenes/det/transfusion/secfpn/camera+lidar/swint_v0p075/convfuser.yaml --mode pred --checkpoint bevfusion/pretrained/bevfusion-det.pth --out-dir ./data/nuscenes/mini/visulize/pred/ --bbox-score 0.3
+CUDA_VISIBLE_DEVICES=7 torchpack dist-run -np 1 python ./bevfusion/tools/visualize.py bevfusion/configs/nuscenes/det/transfusion/secfpn/camera+lidar/swint_v0p075/convfuser.yaml --mode pred --checkpoint bevfusion/pretrained/bevfusion-det.pth --out-dir ./data/nuscenes/mini/visulize/pred/ --bbox-score 0.3 --split test
+
+CUDA_VISIBLE_DEVICES=7 torchpack dist-run -np 1 python ./bevfusion/tools/visualize.py bevfusion/configs/nuscenes/det/transfusion/secfpn/camera+lidar/swint_v0p075/convfuser.yaml --mode gt --checkpoint bevfusion/pretrained/bevfusion-det.pth --out-dir ./data/nuscenes/mini/visulize/ --bbox-score 0.3 --split val
 """

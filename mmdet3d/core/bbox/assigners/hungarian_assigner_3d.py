@@ -12,7 +12,7 @@ except ImportError:
 
 
 @BBOX_ASSIGNERS.register_module()
-class HungarianAssigner3D(BaseAssigner):
+class HungarianAssigner3D_v3(BaseAssigner):
     """Computes one-to-one matching between predictions and ground truth.
     This class computes an assignment between the targets and the predictions
     based on the costs. The costs are weighted sum of three components:
