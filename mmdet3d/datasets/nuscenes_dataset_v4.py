@@ -305,7 +305,11 @@ class NuScenesDataset_v4(Custom3DDataset_v4):
                 lidar2cam_rt = np.eye(4)
                 lidar2cam_rt[:3, :3] = lidar2cam_r.T
                 lidar2cam_rt[3, :3] = -lidar2cam_t
-                intrinsic = cam_info['cam_intrinsic']
+                if 'cam_intrinsic' in cam_info.keys():
+                    intrinsic = cam_info['cam_intrinsic']
+                elif 'camera_intrinsics' in cam_info.keys():
+                    intrinsic = cam_info['camera_intrinsics']
+
                 viewpad = np.eye(4)
                 viewpad[:intrinsic.shape[0], :intrinsic.shape[1]] = intrinsic
                 lidar2img_rt = (viewpad @ lidar2cam_rt.T)
@@ -313,7 +317,7 @@ class NuScenesDataset_v4(Custom3DDataset_v4):
                 caminfos.append(
                     {'sensor2lidar_translation':sensor2lidar_translation, 
                     'sensor2lidar_rotation':sensor2lidar_rotation,
-                    'cam_intrinsic':cam_info['cam_intrinsic']
+                    'cam_intrinsic':cam_info['camera_intrinsics']
                     })
 
             input_dict.update(
@@ -323,9 +327,9 @@ class NuScenesDataset_v4(Custom3DDataset_v4):
                     caminfo=caminfos
                 ))
 
-        if not self.test_mode:
-            annos = self.get_ann_info(index)
-            input_dict['ann_info'] = annos
+        # if not self.test_mode:
+        annos = self.get_ann_info(index)
+        input_dict['ann_info'] = annos
 
         return input_dict
 
