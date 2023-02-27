@@ -17,11 +17,12 @@ from .voxelnet import VoxelNet
 from .bevf_transfusion_aug import BEVF_TransFusion_Aug
 from .bevf_faster_rcnn_aug import BEVF_FasterRCNN_Aug
 from .transfusion_det import TransFusionDetector
+from .centerpoint_fusion import CenterPointFusion
 
 __all__ = [
     'Base3DDetector', 'VoxelNet', 'DynamicVoxelNet', 'MVXTwoStageDetector',
     'DynamicMVXFasterRCNN', 'MVXFasterRCNN', 'PartA2', 'VoteNet', 'H3DNet',
     'CenterPoint', 'SSD3DNet', 'ImVoteNet', 'SingleStageMono3DDetector',
     'FCOSMono3D', 'ImVoxelNet', 'GroupFree3DNet', 'BEVF_TransFusion_Aug',
-    'BEVF_FasterRCNN_Aug', 'TransFusionDetector'
+    'BEVF_FasterRCNN_Aug', 'TransFusionDetector', 'CenterPointFusion'
 ]

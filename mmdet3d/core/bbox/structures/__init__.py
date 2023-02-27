@@ -7,6 +7,7 @@ from .lidar_box3d import LiDARInstance3DBoxes
 from .utils import (
     get_box_type,
     get_proj_mat_by_coord_type,
+    get_proj_mat_by_coord_type_v6,
     limit_period,
     mono_cam_box2vis,
     points_cam2img,

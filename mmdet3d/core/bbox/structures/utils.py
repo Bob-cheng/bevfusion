@@ -229,3 +229,20 @@ def get_proj_mat_by_coord_type(img_meta, coord_type):
     mapping = {"LIDAR": "lidar2image", "DEPTH": "depth2img", "CAMERA": "cam2img"}
     assert coord_type in mapping.keys()
     return img_meta[mapping[coord_type]]
+
+def get_proj_mat_by_coord_type_v6(img_meta, coord_type):
+    """Obtain image features using points.
+
+    Args:
+        img_meta (dict): Meta info.
+        coord_type (str): 'DEPTH' or 'CAMERA' or 'LIDAR'.
+            Can be case-insensitive.
+
+    Returns:
+        torch.Tensor: transformation matrix.
+    """
+    coord_type = coord_type.upper()
+    mapping = {'LIDAR': 'lidar2img', 'DEPTH': 'depth2img', 'CAMERA': 'cam2img'}
+    assert coord_type in mapping.keys()
+    return img_meta[mapping[coord_type]]
+
