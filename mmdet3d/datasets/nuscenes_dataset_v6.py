@@ -247,9 +247,9 @@ class NuScenesDataset_v6(Custom3DDataset_v6):
                     lidar2img=lidar2img_rts,
                 ))
 
-        if not self.test_mode:
-            annos = self.get_ann_info(index)
-            input_dict['ann_info'] = annos
+        # if not self.test_mode:
+        annos = self.get_ann_info(index)
+        input_dict['ann_info'] = annos
 
         return input_dict
 
@@ -290,8 +290,12 @@ class NuScenesDataset_v6(Custom3DDataset_v6):
             gt_bboxes_3d = np.concatenate([gt_bboxes_3d, gt_velocity], axis=-1)
 
         # NOTE load image annotations
-        gt_bboxes_2d = info['gt_boxes_2d'][mask]
-        gt_labels_2d = gt_labels_3d.copy()
+        if not self.test_mode:
+            gt_bboxes_2d = info['gt_boxes_2d'][mask]
+            gt_labels_2d = gt_labels_3d.copy()
+        else:
+            gt_bboxes_2d = None
+            gt_labels_2d = None
 
         # the nuscenes box center is [0.5, 0.5, 0.5], we change it to be
         # the same as KITTI (0.5, 0.5, 0)

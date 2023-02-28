@@ -304,7 +304,7 @@ class CenterPointFusion(MVXTwoStageDetector):
                 bbox_list[0][key] = bbox_list[0][key].to('cpu')
             return bbox_list[0]
     
-    def simple_test(self, points, img_metas, img=None, rescale=False):
+    def simple_test(self, points, img_metas, img=None, rescale=False, **kwargs):
         """Test function without augmentaiton."""
         img_feats, pts_feats = self.extract_feat(
             points, img=img, img_metas=img_metas)
