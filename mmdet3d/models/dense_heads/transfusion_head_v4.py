@@ -1151,6 +1151,8 @@ class TransFusionHead_v4(nn.Module):
             bboxes_tensor_layer = bboxes_tensor[self.num_proposals * idx_layer:self.num_proposals * (idx_layer + 1), :]
             score_layer = score[..., self.num_proposals * idx_layer:self.num_proposals * (idx_layer + 1)]
 
+            if hasattr(self, 'is_geting_bboxs') and self.is_geting_bboxs: # in testing
+                self.bbox_assigner.cls_cost.weight = 0
             if self.train_cfg.assigner.type == 'HungarianAssigner3D':
                 assign_result = self.bbox_assigner.assign(bboxes_tensor_layer, gt_bboxes_tensor, gt_labels_3d, score_layer, self.train_cfg)
             elif self.train_cfg.assigner.type == 'HeuristicAssigner':
@@ -1251,9 +1253,9 @@ class TransFusionHead_v4(nn.Module):
             dict[str:torch.Tensor]: Loss of heatmap and bbox of each task.
         """
         if self.initialize_by_heatmap:
-            labels, label_weights, bbox_targets, bbox_weights, ious, num_pos, matched_ious, heatmap = self.get_targets(gt_bboxes_3d, gt_labels_3d, preds_dicts[0])
+            labels, label_weights, bbox_targets, bbox_weights, ious, num_pos, matched_ious, heatmap, obj_gt_indices = self.get_targets(gt_bboxes_3d, gt_labels_3d, preds_dicts[0])
         else:
-            labels, label_weights, bbox_targets, bbox_weights, ious, num_pos, matched_ious = self.get_targets(gt_bboxes_3d, gt_labels_3d, preds_dicts[0])
+            labels, label_weights, bbox_targets, bbox_weights, ious, num_pos, matched_ious, obj_gt_indices = self.get_targets(gt_bboxes_3d, gt_labels_3d, preds_dicts[0])
         if hasattr(self, 'on_the_image_mask'):
             label_weights = label_weights * self.on_the_image_mask
             bbox_weights = bbox_weights * self.on_the_image_mask[:, :, None]
@@ -1321,6 +1323,7 @@ class TransFusionHead_v4(nn.Module):
         Returns:
             list[list[dict]]: Decoded bbox, scores and labels for each layer & each batch
         """
+        self.is_geting_bboxs = True
         if gt_bboxes_3d is not None and gt_labels_3d is not None:
             obj_gt_indices = self.get_targets(gt_bboxes_3d, gt_labels_3d, preds_dicts[0])[-1]
         else:

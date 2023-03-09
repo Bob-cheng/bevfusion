@@ -37,13 +37,14 @@ class TransformerDecoderLayer(nn.Module):
         self.cross_only = cross_only
         if not self.cross_only:
             self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout)
+            self.norm1 = nn.LayerNorm(d_model)
         self.multihead_attn = MultiheadAttention(d_model, nhead, dropout=dropout)
         # Implementation of Feedforward model
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.dropout = nn.Dropout(dropout)
         self.linear2 = nn.Linear(dim_feedforward, d_model)
 
-        self.norm1 = nn.LayerNorm(d_model)
+        
         self.norm2 = nn.LayerNorm(d_model)
         self.norm3 = nn.LayerNorm(d_model)
         self.dropout1 = nn.Dropout(dropout)

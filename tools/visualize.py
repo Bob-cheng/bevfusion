@@ -144,6 +144,8 @@ def main() -> None:
         else:
             masks = None
 
+        box_idxs = np.arange(len(labels))
+
         if "img" in data:
             for k, image_path in enumerate(metas["filename"]):
                 image = mmcv.imread(image_path)
@@ -154,6 +156,7 @@ def main() -> None:
                     labels=labels,
                     transform=metas["lidar2image"][k],
                     classes=cfg.object_classes,
+                    box_idxs=box_idxs
                 )
 
         if "points" in data:

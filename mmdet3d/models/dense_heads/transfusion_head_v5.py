@@ -981,8 +981,8 @@ class TransFusionHead_v5(nn.Module):
             #     img_feat_collapsed = img_feat.max(2).values
             # img_feat_collapsed = self.fc(img_feat_collapsed).view(batch_size, num_channel, img_w * self.num_views)
 
-            img_feat = self.shared_conv_img(img_inputs)  # [BS * n_views, C, H, W]
-
+            img_feat = self.shared_conv_img(img_inputs)  # [BS * n_views, C, H, W] img_inputs shape: 6, 256, 112, 200
+                                                        # img_feat = 6, 128, 112, 200
             img_h, img_w, num_channel = img_inputs.shape[-2], img_inputs.shape[-1], img_feat.shape[1]
             raw_img_feat = img_feat.view(batch_size, self.num_views, num_channel, img_h, img_w).permute(0, 2, 3, 1, 4) # [BS, C, H, n_views, W]
             img_feat = raw_img_feat.reshape(batch_size, num_channel, img_h, img_w * self.num_views)  # [BS, C, H, n_views*W]
@@ -1105,6 +1105,7 @@ class TransFusionHead_v5(nn.Module):
 
             if i == 0:
                 query_feat = self.decoder[i](query_feat, lidar_feat_flatten, query_pos, bev_pos)
+                # [1, 128, 200], [1, 128, 32400], [1, 200, 2], [1, 32400, 2]
             else:
 
 
