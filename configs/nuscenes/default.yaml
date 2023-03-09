@@ -1,6 +1,8 @@
 dataset_type: NuScenesDataset
 # dataset_root: data/nuscenes/mini/
 dataset_root: data/nuscenes/
+# eval_dataset_root: data/nuscenes/
+eval_dataset_root: data/nuscenes/mini/
 gt_paste_stop_epoch: -1
 reduce_beams: 32
 load_dim: 5
@@ -276,8 +278,8 @@ data:
       box_type_3d: LiDAR
   val:
     type: ${dataset_type}
-    dataset_root: ${dataset_root}
-    ann_file: ${dataset_root + "nuscenes_infos_train.pkl"}
+    dataset_root: ${eval_dataset_root}
+    ann_file: ${eval_dataset_root + "nuscenes_infos_train.pkl"}
     pipeline: ${test_pipeline}
     object_classes: ${object_classes}
     map_classes: ${map_classes}
@@ -286,8 +288,8 @@ data:
     box_type_3d: LiDAR
   test:
     type: ${dataset_type}
-    dataset_root: ${dataset_root}
-    ann_file: ${dataset_root + "nuscenes_infos_val.pkl"}
+    dataset_root: ${eval_dataset_root}
+    ann_file: ${eval_dataset_root + "nuscenes_infos_val.pkl"}
     pipeline: ${test_pipeline}
     object_classes: ${object_classes}
     map_classes: ${map_classes}

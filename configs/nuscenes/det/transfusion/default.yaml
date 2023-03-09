@@ -9,6 +9,8 @@ model:
       num_classes: 10
       num_decoder_layers: 1
       num_heads: 8
+      learnable_query_pos: false
+      initialize_by_heatmap: true
       nms_kernel_size: 3
       ffn_channel: 256
       dropout: 0.1

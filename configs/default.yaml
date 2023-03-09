@@ -1,9 +1,10 @@
 seed: 17
-deterministic: True
+deterministic: False # for training purpose
 
 checkpoint_config:
-  interval: 1
-  max_keep_ckpts: 1
+  interval: 2000
+  by_epoch: false
+  max_keep_ckpts: 2
 
 log_config:
   interval: 50
