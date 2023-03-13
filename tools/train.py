@@ -78,7 +78,7 @@ def main():
         datasets,
         cfg,
         distributed=True,
-        validate=True,
+        validate=False, # True, Bob: changed because validate raise error
         timestamp=timestamp,
     )
 

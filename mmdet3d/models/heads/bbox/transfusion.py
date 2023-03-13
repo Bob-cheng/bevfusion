@@ -45,6 +45,8 @@ class TransFusionHead(nn.Module):
         # config for Transformer
         num_decoder_layers=3,
         num_heads=8,
+        learnable_query_pos=False,
+        initialize_by_heatmap=True,
         nms_kernel_size=1,
         ffn_channel=256,
         dropout=0.1,
@@ -77,9 +79,14 @@ class TransFusionHead(nn.Module):
         self.auxiliary = auxiliary
         self.in_channels = in_channels
         self.num_heads = num_heads
+        self.learnable_query_pos = learnable_query_pos
+        self.initialize_by_heatmap = initialize_by_heatmap
         self.num_decoder_layers = num_decoder_layers
         self.bn_momentum = bn_momentum
         self.nms_kernel_size = nms_kernel_size
+        if self.initialize_by_heatmap is True:
+            assert self.learnable_query_pos is False, "initialized by heatmap is conflicting with learnable query position"
+        
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
 
@@ -104,30 +111,36 @@ class TransFusionHead(nn.Module):
             bias=bias,
         )
 
-        layers = []
-        layers.append(
-            ConvModule(
-                hidden_channel,
-                hidden_channel,
-                kernel_size=3,
-                padding=1,
-                bias=bias,
-                conv_cfg=dict(type="Conv2d"),
-                norm_cfg=dict(type="BN2d"),
+        if self.initialize_by_heatmap:
+            layers = []
+            layers.append(
+                ConvModule(
+                    hidden_channel,
+                    hidden_channel,
+                    kernel_size=3,
+                    padding=1,
+                    bias=bias,
+                    conv_cfg=dict(type="Conv2d"),
+                    norm_cfg=dict(type="BN2d"),
+                )
             )
-        )
-        layers.append(
-            build_conv_layer(
-                dict(type="Conv2d"),
-                hidden_channel,
-                num_classes,
-                kernel_size=3,
-                padding=1,
-                bias=bias,
+            layers.append(
+                build_conv_layer(
+                    dict(type="Conv2d"),
+                    hidden_channel,
+                    num_classes,
+                    kernel_size=3,
+                    padding=1,
+                    bias=bias,
+                )
             )
-        )
-        self.heatmap_head = nn.Sequential(*layers)
-        self.class_encoding = nn.Conv1d(num_classes, hidden_channel, 1)
+            self.heatmap_head = nn.Sequential(*layers)
+            self.class_encoding = nn.Conv1d(num_classes, hidden_channel, 1)
+        else:
+            # query feature
+            self.query_feat = nn.Parameter(torch.randn(1, hidden_channel, self.num_proposals))
+            self.query_pos = nn.Parameter(torch.rand([1, self.num_proposals, 2]), requires_grad=learnable_query_pos)
+
 
         # transformer decoder layers for object query with LiDAR feature
         self.decoder = nn.ModuleList()
@@ -212,7 +225,7 @@ class TransFusionHead(nn.Module):
                 build_assigner(res) for res in self.train_cfg.assigner
             ]
 
-    def forward_single(self, inputs, img_inputs, metas):
+    def forward_single(self, inputs, pure_lidar_inputs, pure_cam_inputs, img_inputs, metas):
         """Forward function for CenterPoint.
         Args:
             inputs (torch.Tensor): Input feature map with the shape of
@@ -234,67 +247,73 @@ class TransFusionHead(nn.Module):
         #################################
         # image guided query initialization
         #################################
-        dense_heatmap = self.heatmap_head(lidar_feat)
-        dense_heatmap_img = None
-        heatmap = dense_heatmap.detach().sigmoid()
-        padding = self.nms_kernel_size // 2
-        local_max = torch.zeros_like(heatmap)
-        # equals to nms radius = voxel_size * out_size_factor * kenel_size
-        local_max_inner = F.max_pool2d(
-            heatmap, kernel_size=self.nms_kernel_size, stride=1, padding=0
-        )
-        local_max[:, :, padding:(-padding), padding:(-padding)] = local_max_inner
-        ## for Pedestrian & Traffic_cone in nuScenes
-        if self.test_cfg["dataset"] == "nuScenes":
-            local_max[
-                :,
-                8,
-            ] = F.max_pool2d(heatmap[:, 8], kernel_size=1, stride=1, padding=0)
-            local_max[
-                :,
-                9,
-            ] = F.max_pool2d(heatmap[:, 9], kernel_size=1, stride=1, padding=0)
-        elif self.test_cfg["dataset"] == "Waymo":  # for Pedestrian & Cyclist in Waymo
-            local_max[
-                :,
-                1,
-            ] = F.max_pool2d(heatmap[:, 1], kernel_size=1, stride=1, padding=0)
-            local_max[
-                :,
-                2,
-            ] = F.max_pool2d(heatmap[:, 2], kernel_size=1, stride=1, padding=0)
-        heatmap = heatmap * (heatmap == local_max)
-        heatmap = heatmap.view(batch_size, heatmap.shape[1], -1)
+        if self.initialize_by_heatmap:
+            ## generate heatmap with fused lidar and camera feature (overall-sensitivity)
+            dense_heatmap = self.heatmap_head(lidar_feat) # lidar_feat: 1, 128, 180, 180
+            dense_heatmap_img = None
+            heatmap = dense_heatmap.detach().sigmoid()
+            padding = self.nms_kernel_size // 2
+            local_max = torch.zeros_like(heatmap)
+            # equals to nms radius = voxel_size * out_size_factor * kenel_size
+            local_max_inner = F.max_pool2d(
+                heatmap, kernel_size=self.nms_kernel_size, stride=1, padding=0
+            )
+            local_max[:, :, padding:(-padding), padding:(-padding)] = local_max_inner
+            ## for Pedestrian & Traffic_cone in nuScenes
+            if self.test_cfg["dataset"] == "nuScenes":
+                local_max[
+                    :,
+                    8,
+                ] = F.max_pool2d(heatmap[:, 8], kernel_size=1, stride=1, padding=0)
+                local_max[
+                    :,
+                    9,
+                ] = F.max_pool2d(heatmap[:, 9], kernel_size=1, stride=1, padding=0)
+            elif self.test_cfg["dataset"] == "Waymo":  # for Pedestrian & Cyclist in Waymo
+                local_max[
+                    :,
+                    1,
+                ] = F.max_pool2d(heatmap[:, 1], kernel_size=1, stride=1, padding=0)
+                local_max[
+                    :,
+                    2,
+                ] = F.max_pool2d(heatmap[:, 2], kernel_size=1, stride=1, padding=0)
+            heatmap = heatmap * (heatmap == local_max)
+            heatmap = heatmap.view(batch_size, heatmap.shape[1], -1)
 
-        # top #num_proposals among all classes
-        top_proposals = heatmap.view(batch_size, -1).argsort(dim=-1, descending=True)[
-            ..., : self.num_proposals
-        ]
-        # top_proposals_class = top_proposals // heatmap.shape[-1]
-        top_proposals_class = torch.div(top_proposals, heatmap.shape[-1], rounding_mode='trunc')
-        top_proposals_index = top_proposals % heatmap.shape[-1]
-        query_feat = lidar_feat_flatten.gather(
-            index=top_proposals_index[:, None, :].expand(
-                -1, lidar_feat_flatten.shape[1], -1
-            ),
-            dim=-1,
-        )
-        self.query_labels = top_proposals_class
+            # top #num_proposals among all classes
+            top_proposals = heatmap.view(batch_size, -1).argsort(dim=-1, descending=True)[
+                ..., : self.num_proposals
+            ]
+            # top_proposals_class = top_proposals // heatmap.shape[-1]
+            top_proposals_class = torch.div(top_proposals, heatmap.shape[-1], rounding_mode='trunc')
+            top_proposals_index = top_proposals % heatmap.shape[-1]
+            query_feat = lidar_feat_flatten.gather(
+                index=top_proposals_index[:, None, :].expand(
+                    -1, lidar_feat_flatten.shape[1], -1
+                ),
+                dim=-1,
+            )
+            self.query_labels = top_proposals_class
 
-        # add category embedding
-        one_hot = F.one_hot(top_proposals_class, num_classes=self.num_classes).permute(
-            0, 2, 1
-        )
-        query_cat_encoding = self.class_encoding(one_hot.float())
-        query_feat += query_cat_encoding
+            # add category embedding
+            one_hot = F.one_hot(top_proposals_class, num_classes=self.num_classes).permute(
+                0, 2, 1
+            )
+            query_cat_encoding = self.class_encoding(one_hot.float())
+            query_feat += query_cat_encoding
 
-        query_pos = bev_pos.gather(
-            index=top_proposals_index[:, None, :]
-            .permute(0, 2, 1)
-            .expand(-1, -1, bev_pos.shape[-1]),
-            dim=1,
-        )
+            query_pos = bev_pos.gather(
+                index=top_proposals_index[:, None, :]
+                .permute(0, 2, 1)
+                .expand(-1, -1, bev_pos.shape[-1]),
+                dim=1,
+            )
 
+        else:
+            query_feat = self.query_feat.repeat(batch_size, 1, 1)  # [BS, C, num_proposals]
+            base_xyz = self.query_pos.repeat(batch_size, 1, 1).to(lidar_feat.device)  # [BS, num_proposals, 2]
+            query_pos = self.query_pos
         #################################
         # transformer decoder layer (LiDAR feature as K,V)
         #################################
@@ -320,11 +339,12 @@ class TransFusionHead(nn.Module):
         #################################
         # transformer decoder layer (img feature as K,V)
         #################################
-        ret_dicts[0]["query_heatmap_score"] = heatmap.gather(
-            index=top_proposals_index[:, None, :].expand(-1, self.num_classes, -1),
-            dim=-1,
-        )  # [bs, num_classes, num_proposals]
-        ret_dicts[0]["dense_heatmap"] = dense_heatmap
+        if self.initialize_by_heatmap:
+            ret_dicts[0]["query_heatmap_score"] = heatmap.gather(
+                index=top_proposals_index[:, None, :].expand(-1, self.num_classes, -1),
+                dim=-1,
+            )  # [bs, num_classes, num_proposals]
+            ret_dicts[0]["dense_heatmap"] = dense_heatmap
 
         if self.auxiliary is False:
             # only return the results of last decoder layer
@@ -341,7 +361,7 @@ class TransFusionHead(nn.Module):
                 new_res[key] = ret_dicts[0][key]
         return [new_res]
 
-    def forward(self, feats, metas):
+    def forward(self, feats, lidar_feats, cam_feats, metas):
         """Forward pass.
         Args:
             feats (list[torch.Tensor]): Multi-level features, e.g.,
@@ -351,7 +371,9 @@ class TransFusionHead(nn.Module):
         """
         if isinstance(feats, torch.Tensor):
             feats = [feats]
-        res = multi_apply(self.forward_single, feats, [None], [metas])
+        lidar_feats = [lidar_feats]
+        cam_feats = [cam_feats]
+        res = multi_apply(self.forward_single, feats, lidar_feats, cam_feats, [None], [metas])
         assert len(res) == 1, "only support one level features."
         return res
 
@@ -394,19 +416,24 @@ class TransFusionHead(nn.Module):
         ious = torch.cat(res_tuple[4], dim=0)
         num_pos = np.sum(res_tuple[5])
         matched_ious = np.mean(res_tuple[6])
-        heatmap = torch.cat(res_tuple[7], dim=0)
-        obj_gt_indices = torch.cat(res_tuple[8], dim=0)
-        return (
-            labels,
-            label_weights,
-            bbox_targets,
-            bbox_weights,
-            ious,
-            num_pos,
-            matched_ious,
-            heatmap,
-            obj_gt_indices
-        )
+        obj_gt_indices = torch.cat(res_tuple[-1], dim=0)
+        if self.initialize_by_heatmap:
+            heatmap = torch.cat(res_tuple[7], dim=0)
+            return labels, label_weights, bbox_targets, bbox_weights, ious, num_pos, matched_ious, heatmap, obj_gt_indices
+        else:
+            return labels, label_weights, bbox_targets, bbox_weights, ious, num_pos, matched_ious, obj_gt_indices
+        # heatmap = torch.cat(res_tuple[7], dim=0)
+        # return (
+        #     labels,
+        #     label_weights,
+        #     bbox_targets,
+        #     bbox_weights,
+        #     ious,
+        #     num_pos,
+        #     matched_ious,
+        #     heatmap,
+        #     obj_gt_indices
+        # )
 
     def get_targets_single(self, gt_bboxes_3d, gt_labels_3d, preds_dict, batch_idx):
         """Generate training targets for a single sample.
@@ -457,7 +484,8 @@ class TransFusionHead(nn.Module):
                 ...,
                 self.num_proposals * idx_layer : self.num_proposals * (idx_layer + 1),
             ]
-
+            # if hasattr(self, 'is_getting_bboxes') and self.is_getting_bboxes:
+            #     self.bbox_assigner.cls_cost.weight = 0.00001
             if self.train_cfg.assigner.type == "HungarianAssigner3D":
                 assign_result = self.bbox_assigner.assign(
                     bboxes_tensor_layer,
@@ -532,67 +560,81 @@ class TransFusionHead(nn.Module):
             label_weights[neg_inds] = torch.ones_like(label_weights[neg_inds])
 
         # # compute dense heatmap targets
-        device = labels.device
-        gt_bboxes_3d = torch.cat(
-            [gt_bboxes_3d.gravity_center, gt_bboxes_3d.tensor[:, 3:]], dim=1
-        ).to(device)
-        grid_size = torch.tensor(self.train_cfg["grid_size"])
-        pc_range = torch.tensor(self.train_cfg["point_cloud_range"])
-        voxel_size = torch.tensor(self.train_cfg["voxel_size"])
-        feature_map_size = (
-            # grid_size[:2] // self.train_cfg["out_size_factor"]
-            torch.div(grid_size[:2], self.train_cfg["out_size_factor"], rounding_mode='trunc')
-        )  # [x_len, y_len]
-        heatmap = gt_bboxes_3d.new_zeros(
-            self.num_classes, feature_map_size[1], feature_map_size[0]
-        )
-        for idx in range(len(gt_bboxes_3d)):
-            width = gt_bboxes_3d[idx][3]
-            length = gt_bboxes_3d[idx][4]
-            width = width / voxel_size[0] / self.train_cfg["out_size_factor"]
-            length = length / voxel_size[1] / self.train_cfg["out_size_factor"]
-            if width > 0 and length > 0:
-                radius = gaussian_radius(
-                    (length, width), min_overlap=self.train_cfg["gaussian_overlap"]
-                )
-                radius = max(self.train_cfg["min_radius"], int(radius))
-                x, y = gt_bboxes_3d[idx][0], gt_bboxes_3d[idx][1]
+        if self.initialize_by_heatmap:
+            device = labels.device
+            gt_bboxes_3d = torch.cat(
+                [gt_bboxes_3d.gravity_center, gt_bboxes_3d.tensor[:, 3:]], dim=1
+            ).to(device)
+            grid_size = torch.tensor(self.train_cfg["grid_size"])
+            pc_range = torch.tensor(self.train_cfg["point_cloud_range"])
+            voxel_size = torch.tensor(self.train_cfg["voxel_size"])
+            feature_map_size = (
+                # grid_size[:2] // self.train_cfg["out_size_factor"]
+                torch.div(grid_size[:2], self.train_cfg["out_size_factor"], rounding_mode='trunc')
+            )  # [x_len, y_len]
+            heatmap = gt_bboxes_3d.new_zeros(
+                self.num_classes, feature_map_size[1], feature_map_size[0]
+            )
+            for idx in range(len(gt_bboxes_3d)):
+                width = gt_bboxes_3d[idx][3]
+                length = gt_bboxes_3d[idx][4]
+                width = width / voxel_size[0] / self.train_cfg["out_size_factor"]
+                length = length / voxel_size[1] / self.train_cfg["out_size_factor"]
+                if width > 0 and length > 0:
+                    radius = gaussian_radius(
+                        (length, width), min_overlap=self.train_cfg["gaussian_overlap"]
+                    )
+                    radius = max(self.train_cfg["min_radius"], int(radius))
+                    x, y = gt_bboxes_3d[idx][0], gt_bboxes_3d[idx][1]
 
-                coor_x = (
-                    (x - pc_range[0])
-                    / voxel_size[0]
-                    / self.train_cfg["out_size_factor"]
-                )
-                coor_y = (
-                    (y - pc_range[1])
-                    / voxel_size[1]
-                    / self.train_cfg["out_size_factor"]
-                )
+                    coor_x = (
+                        (x - pc_range[0])
+                        / voxel_size[0]
+                        / self.train_cfg["out_size_factor"]
+                    )
+                    coor_y = (
+                        (y - pc_range[1])
+                        / voxel_size[1]
+                        / self.train_cfg["out_size_factor"]
+                    )
 
-                center = torch.tensor(
-                    [coor_x, coor_y], dtype=torch.float32, device=device
-                )
-                center_int = center.to(torch.int32)
+                    center = torch.tensor(
+                        [coor_x, coor_y], dtype=torch.float32, device=device
+                    )
+                    center_int = center.to(torch.int32)
 
-                # original
-                # draw_heatmap_gaussian(heatmap[gt_labels_3d[idx]], center_int, radius)
-                # NOTE: fix
-                draw_heatmap_gaussian(
-                    heatmap[gt_labels_3d[idx]], center_int[[1, 0]], radius
-                )
+                    # original
+                    # draw_heatmap_gaussian(heatmap[gt_labels_3d[idx]], center_int, radius)
+                    # NOTE: fix
+                    draw_heatmap_gaussian(
+                        heatmap[gt_labels_3d[idx]], center_int[[1, 0]], radius
+                    )
 
-        mean_iou = ious[pos_inds].sum() / max(len(pos_inds), 1)
-        return (
-            labels[None],
-            label_weights[None],
-            bbox_targets[None],
-            bbox_weights[None],
-            ious[None],
-            int(pos_inds.shape[0]),
-            float(mean_iou),
-            heatmap[None],
-            obj_gt_indices
-        )
+            mean_iou = ious[pos_inds].sum() / max(len(pos_inds), 1)
+            return (
+                labels[None],
+                label_weights[None],
+                bbox_targets[None],
+                bbox_weights[None],
+                ious[None],
+                int(pos_inds.shape[0]),
+                float(mean_iou),
+                heatmap[None],
+                obj_gt_indices
+            )
+        else:
+            mean_iou = ious[pos_inds].sum() / max(len(pos_inds), 1)
+            return (
+                labels[None], 
+                label_weights[None], 
+                bbox_targets[None], 
+                bbox_weights[None], 
+                ious[None], 
+                int(pos_inds.shape[0]), 
+                float(mean_iou), 
+                obj_gt_indices
+            )
+
 
     @force_fp32(apply_to=("preds_dicts"))
     def loss(self, gt_bboxes_3d, gt_labels_3d, preds_dicts, **kwargs):
@@ -605,17 +647,23 @@ class TransFusionHead(nn.Module):
         Returns:
             dict[str:torch.Tensor]: Loss of heatmap and bbox of each task.
         """
-        (
-            labels,
-            label_weights,
-            bbox_targets,
-            bbox_weights,
-            ious,
-            num_pos,
-            matched_ious,
-            heatmap,
-            obj_gt_indices
-        ) = self.get_targets(gt_bboxes_3d, gt_labels_3d, preds_dicts[0])
+        # (
+        #     labels,
+        #     label_weights,
+        #     bbox_targets,
+        #     bbox_weights,
+        #     ious,
+        #     num_pos,
+        #     matched_ious,
+        #     heatmap,
+        #     obj_gt_indices
+        # ) = self.get_targets(gt_bboxes_3d, gt_labels_3d, preds_dicts[0])
+        self.is_getting_bboxes = False
+        if self.initialize_by_heatmap:
+            (labels, label_weights, bbox_targets, bbox_weights, ious, num_pos, matched_ious, heatmap, obj_gt_indices) = self.get_targets(gt_bboxes_3d, gt_labels_3d, preds_dicts[0])
+        else:
+            (labels, label_weights, bbox_targets, bbox_weights, ious, num_pos, matched_ious, obj_gt_indices) = self.get_targets(gt_bboxes_3d, gt_labels_3d, preds_dicts[0])
+        
         if hasattr(self, "on_the_image_mask"):
             label_weights = label_weights * self.on_the_image_mask
             bbox_weights = bbox_weights * self.on_the_image_mask[:, :, None]
@@ -623,13 +671,14 @@ class TransFusionHead(nn.Module):
         preds_dict = preds_dicts[0][0]
         loss_dict = dict()
 
-        # compute heatmap loss
-        loss_heatmap = self.loss_heatmap(
-            clip_sigmoid(preds_dict["dense_heatmap"]),
-            heatmap,
-            avg_factor=max(heatmap.eq(1).float().sum().item(), 1),
-        )
-        loss_dict["loss_heatmap"] = loss_heatmap
+        if self.initialize_by_heatmap:
+            # compute heatmap loss
+            loss_heatmap = self.loss_heatmap(
+                clip_sigmoid(preds_dict["dense_heatmap"]),
+                heatmap,
+                avg_factor=max(heatmap.eq(1).float().sum().item(), 1),
+            )
+            loss_dict["loss_heatmap"] = loss_heatmap
 
         # compute loss for each layer
         for idx_layer in range(self.num_decoder_layers if self.auxiliary else 1):
@@ -736,6 +785,7 @@ class TransFusionHead(nn.Module):
         Returns:
             list[list[dict]]: Decoded bbox, scores and labels for each layer & each batch
         """
+        self.is_getting_bboxes = True
         if gt_bboxes_3d is not None and gt_labels_3d is not None:
             obj_gt_indices = self.get_targets(gt_bboxes_3d, gt_labels_3d, preds_dicts[0])[-1]
         else:
@@ -746,10 +796,13 @@ class TransFusionHead(nn.Module):
             batch_score = preds_dict[0]["heatmap"][..., -self.num_proposals :].sigmoid()
             # if self.loss_iou.loss_weight != 0:
             #    batch_score = torch.sqrt(batch_score * preds_dict[0]['iou'][..., -self.num_proposals:].sigmoid())
-            one_hot = F.one_hot(
-                self.query_labels, num_classes=self.num_classes
-            ).permute(0, 2, 1)
-            batch_score = batch_score * preds_dict[0]["query_heatmap_score"] * one_hot
+            if self.initialize_by_heatmap:
+                one_hot = F.one_hot(
+                    self.query_labels, num_classes=self.num_classes
+                ).permute(0, 2, 1)
+                batch_score = batch_score * preds_dict[0]["query_heatmap_score"] * one_hot
+            else:
+                batch_score = batch_score
 
             batch_center = preds_dict[0]["center"][..., -self.num_proposals :]
             batch_height = preds_dict[0]["height"][..., -self.num_proposals :]

@@ -1605,11 +1605,12 @@ class TransFusionHead_v5(nn.Module):
         ious = torch.cat(res_tuple[4], dim=0)
         num_pos = np.sum(res_tuple[5])
         matched_ious = np.mean(res_tuple[6])
+        obj_gt_indices = torch.cat(res_tuple[-1], dim=0)
         if self.initialize_by_heatmap:
             heatmap = torch.cat(res_tuple[7], dim=0)
-            return labels, label_weights, bbox_targets, bbox_weights, ious, num_pos, matched_ious, heatmap
+            return labels, label_weights, bbox_targets, bbox_weights, ious, num_pos, matched_ious, heatmap, obj_gt_indices
         else:
-            return labels, label_weights, bbox_targets, bbox_weights, ious, num_pos, matched_ious
+            return labels, label_weights, bbox_targets, bbox_weights, ious, num_pos, matched_ious, obj_gt_indices
 
     def get_targets_single(self, gt_bboxes_3d, gt_labels_3d, preds_dict, batch_idx):
         """Generate training targets for a single sample.
@@ -1655,7 +1656,8 @@ class TransFusionHead_v5(nn.Module):
         for idx_layer in range(num_layer):
             bboxes_tensor_layer = bboxes_tensor[self.num_proposals * idx_layer:self.num_proposals * (idx_layer + 1), :]
             score_layer = score[..., self.num_proposals * idx_layer:self.num_proposals * (idx_layer + 1)]
-
+            # if hasattr(self, 'is_getting_bboxes') and self.is_getting_bboxes:
+            #     self.bbox_assigner.cls_cost.weight = 0.00001
             if self.train_cfg.assigner.type == 'HungarianAssigner3D':
                 assign_result = self.bbox_assigner.assign(bboxes_tensor_layer, gt_bboxes_tensor, gt_labels_3d, score_layer, self.train_cfg)
             elif self.train_cfg.assigner.type == 'HeuristicAssigner':
@@ -1683,6 +1685,7 @@ class TransFusionHead_v5(nn.Module):
         ious = torch.clamp(ious, min=0.0, max=1.0)
         labels = bboxes_tensor.new_zeros(num_proposals, dtype=torch.long)
         label_weights = bboxes_tensor.new_zeros(num_proposals, dtype=torch.long)
+        obj_gt_indices = -1 * bboxes_tensor.new_ones(num_proposals, dtype=torch.long)
 
         if gt_labels_3d is not None:  # default label is -1
             labels += self.num_classes
@@ -1698,6 +1701,7 @@ class TransFusionHead_v5(nn.Module):
                 labels[pos_inds] = 1
             else:
                 labels[pos_inds] = gt_labels_3d[sampling_result.pos_assigned_gt_inds]
+                obj_gt_indices[pos_inds] = sampling_result.pos_assigned_gt_inds
             if self.train_cfg.pos_weight <= 0:
                 label_weights[pos_inds] = 1.0
             else:
@@ -1733,15 +1737,15 @@ class TransFusionHead_v5(nn.Module):
                     draw_heatmap_gaussian(heatmap[gt_labels_3d[idx]], center_int, radius)
 
             mean_iou = ious[pos_inds].sum() / max(len(pos_inds), 1)
-            return labels[None], label_weights[None], bbox_targets[None], bbox_weights[None], ious[None], int(pos_inds.shape[0]), float(mean_iou), heatmap[None]
+            return labels[None], label_weights[None], bbox_targets[None], bbox_weights[None], ious[None], int(pos_inds.shape[0]), float(mean_iou), heatmap[None], obj_gt_indices
 
         else:
             mean_iou = ious[pos_inds].sum() / max(len(pos_inds), 1)
-            return labels[None], label_weights[None], bbox_targets[None], bbox_weights[None], ious[None], int(pos_inds.shape[0]), float(mean_iou)
+            return labels[None], label_weights[None], bbox_targets[None], bbox_weights[None], ious[None], int(pos_inds.shape[0]), float(mean_iou), obj_gt_indices
 
     @force_fp32(apply_to=('preds_dicts'))
     def loss(self, gt_bboxes_3d, gt_labels_3d, preds_dicts,  **kwargs):
-
+        self.is_getting_bboxes = False
         if self.same_assign:
             if self.initialize_by_heatmap:
                 pred_assign = self.get_targets(gt_bboxes_3d, gt_labels_3d, preds_dicts[0])
@@ -1802,14 +1806,14 @@ class TransFusionHead_v5(nn.Module):
         """
         if pred_assign is None:
             if self.initialize_by_heatmap:
-                labels, label_weights, bbox_targets, bbox_weights, ious, num_pos, matched_ious, heatmap = self.get_targets(gt_bboxes_3d, gt_labels_3d, preds_dicts[0])
+                labels, label_weights, bbox_targets, bbox_weights, ious, num_pos, matched_ious, heatmap, obj_gt_indices = self.get_targets(gt_bboxes_3d, gt_labels_3d, preds_dicts[0])
             else:
-                labels, label_weights, bbox_targets, bbox_weights, ious, num_pos, matched_ious = self.get_targets(gt_bboxes_3d, gt_labels_3d, preds_dicts[0])
+                labels, label_weights, bbox_targets, bbox_weights, ious, num_pos, matched_ious, obj_gt_indices = self.get_targets(gt_bboxes_3d, gt_labels_3d, preds_dicts[0])
         else:
             if self.initialize_by_heatmap:
-                labels, label_weights, bbox_targets, bbox_weights, ious, num_pos, matched_ious, heatmap = pred_assign
+                labels, label_weights, bbox_targets, bbox_weights, ious, num_pos, matched_ious, heatmap, obj_gt_indices = pred_assign
             else:
-                labels, label_weights, bbox_targets, bbox_weights, ious, num_pos, matched_ious = pred_assign
+                labels, label_weights, bbox_targets, bbox_weights, ious, num_pos, matched_ious, obj_gt_indices = pred_assign
 
 
         if hasattr(self, 'on_the_image_mask'):
@@ -1863,7 +1867,7 @@ class TransFusionHead_v5(nn.Module):
 
         return loss_dict
 
-    def get_bboxes(self, preds_dicts, img_metas, img=None, rescale=False, for_roi=False):
+    def get_bboxes(self, preds_dicts, img_metas, gt_bboxes_3d=None, gt_labels_3d=None, img=None, rescale=False, for_roi=False):
         """Generate bboxes from bbox head predictions.
 
         Args:
@@ -1872,6 +1876,11 @@ class TransFusionHead_v5(nn.Module):
         Returns:
             list[list[dict]]: Decoded bbox, scores and labels for each layer & each batch
         """
+        self.is_getting_bboxes = True
+        if gt_bboxes_3d is not None and gt_labels_3d is not None:
+            obj_gt_indices = self.get_targets(gt_bboxes_3d, gt_labels_3d, preds_dicts[0])[-1]
+        else:
+            obj_gt_indices = None
         # warning
         decouple_out = None
         if self.decouple:
@@ -1901,7 +1910,15 @@ class TransFusionHead_v5(nn.Module):
             if 'vel' in preds_dict[0]:
                 batch_vel = preds_dict[0]['vel'][..., -self.num_proposals:]
 
-            temp = self.bbox_coder.decode(batch_score, batch_rot, batch_dim, batch_center, batch_height, batch_vel, filter=True)
+            temp = self.bbox_coder.decode(
+                batch_score, 
+                batch_rot, 
+                batch_dim, 
+                batch_center, 
+                batch_height, 
+                batch_vel, 
+                filter=True if obj_gt_indices is None else False,
+            )
 
             if self.test_cfg['dataset'] == 'nuScenes':
                 self.tasks = [
@@ -1921,6 +1938,8 @@ class TransFusionHead_v5(nn.Module):
                 boxes3d = temp[i]['bboxes']
                 scores = temp[i]['scores']
                 labels = temp[i]['labels']
+                if obj_gt_indices is not None:
+                    assert len(labels) == len(obj_gt_indices)
                 ## adopt circle nms for different categories
                 if self.test_cfg['nms_type'] != None:
                     keep_mask = torch.zeros_like(scores)
@@ -1954,9 +1973,19 @@ class TransFusionHead_v5(nn.Module):
                             keep_indices = torch.where(task_mask != 0)[0][task_keep_indices]
                             keep_mask[keep_indices] = 1
                     keep_mask = keep_mask.bool()
-                    ret = dict(bboxes=boxes3d[keep_mask], scores=scores[keep_mask], labels=labels[keep_mask])
+                    ret = dict(
+                        bboxes=boxes3d[keep_mask], 
+                        scores=scores[keep_mask], 
+                        labels=labels[keep_mask],
+                        obj_gt_indices=obj_gt_indices[keep_mask] if obj_gt_indices is not None else None
+                    )
                 else:  # no nms
-                    ret = dict(bboxes=boxes3d, scores=scores, labels=labels)
+                    ret = dict(
+                        bboxes=boxes3d, 
+                        scores=scores, 
+                        labels=labels,
+                        obj_gt_indices=obj_gt_indices
+                    )
                 ret_layer.append(ret)
             rets.append(ret_layer)
         assert len(rets) == 1
@@ -1964,6 +1993,7 @@ class TransFusionHead_v5(nn.Module):
         res = [[
             img_metas[0]['box_type_3d'](rets[0][0]['bboxes'], box_dim=rets[0][0]['bboxes'].shape[-1]),
             rets[0][0]['scores'],
-            rets[0][0]['labels'].int()
+            rets[0][0]['labels'].int(),
+            rets[0][0]["obj_gt_indices"]
         ]]
         return res
