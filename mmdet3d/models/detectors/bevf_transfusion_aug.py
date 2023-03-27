@@ -214,9 +214,10 @@ class BEVF_TransFusion_Aug(BEVF_FasterRCNN_Aug):
         bbox_list = self.pts_bbox_head.get_bboxes(
             outs, img_metas, rescale=rescale, gt_bboxes_3d=gt_bboxes_3d[0], gt_labels_3d=gt_labels_3d[0])
         bbox_results = []
-        for bboxes, scores, labels, obj_gt_indices in bbox_list:
+        for bboxes, scores, labels, obj_gt_indices, dense_heatmap in bbox_list:
             temp_result_dict = bbox3d2result(bboxes, scores, labels)
             temp_result_dict['obj_gt_indices'] = obj_gt_indices.cpu()
+            temp_result_dict['dense_heatmap'] = dense_heatmap.cpu()
             bbox_results.append(temp_result_dict)
         # bbox_results = [
         #     bbox3d2result(bboxes, scores, labels)

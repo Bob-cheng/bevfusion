@@ -1331,6 +1331,7 @@ class TransFusionHead_v4(nn.Module):
             obj_gt_indices = None
         rets = []
         for layer_id, preds_dict in enumerate(preds_dicts):
+            dense_heatmap_layer = preds_dict[0]['dense_heatmap']
             batch_size = preds_dict[0]['heatmap'].shape[0]
             batch_score = preds_dict[0]['heatmap'][..., -self.num_proposals:].sigmoid()
             # if self.loss_iou.loss_weight != 0:
@@ -1422,14 +1423,16 @@ class TransFusionHead_v4(nn.Module):
                         labels=labels,
                         obj_gt_indices=obj_gt_indices
                     )
+                ret['dense_heatmap'] = dense_heatmap_layer[i]
                 ret_layer.append(ret)
             rets.append(ret_layer)
-        assert len(rets) == 1
-        assert len(rets[0]) == 1
+        assert len(rets) == 1 # assert only one later
+        assert len(rets[0]) == 1 # assert only one sample in a batch
         res = [[
             img_metas[0]['box_type_3d'](rets[0][0]['bboxes'], box_dim=rets[0][0]['bboxes'].shape[-1]),
             rets[0][0]['scores'],
             rets[0][0]['labels'].int(),
-            rets[0][0]["obj_gt_indices"]
+            rets[0][0]["obj_gt_indices"],
+            rets[0][0]['dense_heatmap']
         ]]
         return res
