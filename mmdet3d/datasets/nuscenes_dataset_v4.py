@@ -317,7 +317,8 @@ class NuScenesDataset_v4(Custom3DDataset_v4):
                 caminfos.append(
                     {'sensor2lidar_translation':sensor2lidar_translation, 
                     'sensor2lidar_rotation':sensor2lidar_rotation,
-                    'cam_intrinsic':cam_info['camera_intrinsics']
+                    'cam_intrinsic':cam_info['camera_intrinsics'] if 'camera_intrinsics' in cam_info.keys() else\
+                                    cam_info['cam_intrinsic']
                     })
 
             input_dict.update(
