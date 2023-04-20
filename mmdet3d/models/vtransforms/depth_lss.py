@@ -97,6 +97,6 @@ class DepthLSSTransform(BaseDepthTransform):
         return x
 
     def forward(self, *args, **kwargs):
-        x = super().forward(*args, **kwargs)
+        x = super().forward(*args, **kwargs) # shape: (1, 80, 360, 360)
         x = self.downsample(x)
         return x

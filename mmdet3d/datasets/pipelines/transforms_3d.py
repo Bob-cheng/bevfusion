@@ -1184,7 +1184,7 @@ class ImagePad:
 
 @PIPELINES.register_module()
 class ImageNormalize:
-    def __init__(self, mean, std):
+    def __init__(self, mean, std, to_rgb=True):
         self.mean = mean
         self.std = std
         self.compose = torchvision.transforms.Compose(
