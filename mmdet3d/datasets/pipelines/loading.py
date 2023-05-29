@@ -852,13 +852,17 @@ class LoadPointsFromFile_v4(object):
             self.file_client = mmcv.FileClient(**self.file_client_args)
         try:
             pts_bytes = self.file_client.get(pts_filename)
-            points = np.frombuffer(pts_bytes, dtype=np.float32)
+            # points = np.frombuffer(pts_bytes, dtype=np.float32)
+            points = np.frombuffer(pts_bytes)
+            points = points.astype(np.float32)
         except ConnectionError:
             mmcv.check_file_exist(pts_filename)
             if pts_filename.endswith('.npy'):
                 points = np.load(pts_filename)
             else:
-                points = np.fromfile(pts_filename, dtype=np.float32)
+                # points = np.fromfile(pts_filename, dtype=np.float32)
+                points = np.fromfile(pts_filename)
+                points = points.astype(np.float32)
 
         return points
 
@@ -963,13 +967,17 @@ class LoadPointsFromMultiSweeps_v4(object):
             self.file_client = mmcv.FileClient(**self.file_client_args)
         try:
             pts_bytes = self.file_client.get(pts_filename)
-            points = np.frombuffer(pts_bytes, dtype=np.float32)
+            # points = np.frombuffer(pts_bytes, dtype=np.float32)
+            points = np.frombuffer(pts_bytes)
+            points = points.astype(np.float32)
         except ConnectionError:
             mmcv.check_file_exist(pts_filename)
             if pts_filename.endswith('.npy'):
                 points = np.load(pts_filename)
             else:
-                points = np.fromfile(pts_filename, dtype=np.float32)
+                # points = np.fromfile(pts_filename, dtype=np.float32)
+                points = np.fromfile(pts_filename)
+                points = points.astype(np.float32)
         return points
 
     def _remove_close(self, points, radius=1.0):

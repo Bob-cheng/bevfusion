@@ -2524,7 +2524,7 @@ class MyNormalize_v4(object):
             if key =='img_depth':
                 continue
             for idx in range(len(results['img'])):
-                results[key][idx] = mmcv.imnormalize(results[key][idx], self.mean, self.std,
+                results[key][idx] = mmcv.imnormalize(results[key][idx][:,:,:3], self.mean, self.std,
                                                      self.to_rgb)
         results['img_norm_cfg'] = dict(
             mean=self.mean, std=self.std, to_rgb=self.to_rgb)
