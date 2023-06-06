@@ -286,7 +286,8 @@ def _fill_trainval_infos(nusc, train_scenes, val_scenes, test=False, max_sweeps=
 
         if sample["scene_token"] in train_scenes:
             train_nusc_infos.append(info)
-        else:
+        
+        if sample["scene_token"] in val_scenes:
             val_nusc_infos.append(info)
 
     return train_nusc_infos, val_nusc_infos
