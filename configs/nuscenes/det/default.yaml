@@ -1,5 +1,5 @@
 model:
-  type: BEVFusion_v1test
+  type: BEVFusion_v1test2
   encoders: null
   fuser: null
   heads:

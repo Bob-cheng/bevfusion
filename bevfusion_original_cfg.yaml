@@ -26,8 +26,8 @@ cudnn_benchmark: false
 data:
   samples_per_gpu: 4
   test:
-    ann_file: data/nuscenes/mini/nuscenes_infos_train.pkl
-    # ann_file: data/nuscenes/mini/nuscenes_infos_val.pkl
+    # ann_file: data/nuscenes/mini/nuscenes_infos_train.pkl
+    ann_file: data/nuscenes/mini/nuscenes_infos_val.pkl
     box_type_3d: LiDAR
     dataset_root: data/nuscenes/mini/
     map_classes:
@@ -348,8 +348,8 @@ data:
       use_valid_flag: true
     type: CBGSDataset
   val:
-    ann_file: data/nuscenes/mini/nuscenes_infos_train.pkl
-    # ann_file: data/nuscenes/mini/nuscenes_infos_val.pkl
+    # ann_file: data/nuscenes/mini/nuscenes_infos_train.pkl
+    ann_file: data/nuscenes/mini/nuscenes_infos_val.pkl
     box_type_3d: LiDAR
     dataset_root: data/nuscenes/mini/
     map_classes:

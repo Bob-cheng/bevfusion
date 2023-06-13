@@ -1,7 +1,7 @@
 model:
   heads:
     object:
-      type: TransFusionHead_v1test
+      type: TransFusionHead_v1test2
       num_proposals: 200
       auxiliary: true
       in_channels: null
